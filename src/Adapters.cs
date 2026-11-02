@@ -15,6 +15,8 @@ namespace ZiceLan
         public string Gateway = string.Empty;
         public List<string> Dns = new List<string>();
         public bool DhcpEnabled;
+        public bool NetEnabled;
+        public bool PhysicalAdapter;
 
         public bool UsableForNetsh
         {
@@ -31,8 +33,8 @@ namespace ZiceLan
             get
             {
                 string who = Name.Length == 0 ? Description : Name;
-                string ipPart = Ip.Length == 0 ? "无 IPv4" : Ip;
-                if (Mask.Length > 0)
+                string ipPart = IpCore.IsValidIpv4(Ip) ? Ip : "无 IPv4";
+                if (IpCore.IsValidIpv4(Ip) && Mask.Length > 0)
                 {
                     ipPart = ipPart + "/" + Mask;
                 }
@@ -65,7 +67,7 @@ namespace ZiceLan
                 }
 
                 using (var names = new ManagementObjectSearcher("root\\cimv2",
-                    "SELECT Index, Name, NetConnectionID FROM Win32_NetworkAdapter"))
+                    "SELECT Index, Name, NetConnectionID, NetEnabled, PhysicalAdapter FROM Win32_NetworkAdapter"))
                 using (ManagementObjectCollection found = names.Get())
                 {
                     foreach (ManagementObject obj in found)
@@ -79,6 +81,8 @@ namespace ZiceLan
                             {
                                 info.Name = connectionId;
                             }
+                            info.NetEnabled = ToBool(obj["NetEnabled"]);
+                            info.PhysicalAdapter = ToBool(obj["PhysicalAdapter"]);
                         }
                         obj.Dispose();
                     }
@@ -92,9 +96,13 @@ namespace ZiceLan
             var list = new List<AdapterInfo>();
             foreach (KeyValuePair<int, AdapterInfo> pair in byIndex)
             {
-                if (IpCore.IsValidIpv4(pair.Value.Ip))
+                AdapterInfo info = pair.Value;
+                bool hasAddress = IpCore.IsValidIpv4(info.Ip);
+                bool connectedWithoutAddress = !hasAddress && info.NetEnabled && info.PhysicalAdapter
+                    && info.Name.Length > 0;
+                if (hasAddress || connectedWithoutAddress)
                 {
-                    list.Add(pair.Value);
+                    list.Add(info);
                 }
             }
             list.Sort(delegate(AdapterInfo a, AdapterInfo b) { return a.Index.CompareTo(b.Index); });

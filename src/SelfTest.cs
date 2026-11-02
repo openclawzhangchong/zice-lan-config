@@ -183,7 +183,7 @@ namespace ZiceLan
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(exePath);
             Add(checks, "file_version_stamped", version.FileVersion == Product.FileVersion,
                 "expected=" + Product.FileVersion + " got=" + version.FileVersion + " exe=" + Path.GetFileName(exePath));
-            Add(checks, "version_text_is_v1_4", Product.VersionText == "v1.4", "got=" + Product.VersionText);
+            Add(checks, "version_text_is_v1_5", Product.VersionText == "v1.5", "got=" + Product.VersionText);
             Add(checks, "title_is_zice", Product.Title == "智策学校局域网配置软件", "got=" + Product.Title);
 
             List<SubnetPreset> subnets = SubnetPresets.All();
@@ -348,6 +348,42 @@ namespace ZiceLan
                     && Cli.Value(sample, "--ip", string.Empty) == "192.168.168.201"
                     && Cli.Value(sample, "--missing", "默认值") == "默认值",
                 "size=" + Cli.Value(sample, "--size", "-") + " bg=" + Cli.Value(sample, "--bg", "-"));
+            AdapterInfo withAddress = new AdapterInfo();
+            withAddress.Name = "以太网";
+            withAddress.Ip = "192.168.168.201";
+            withAddress.Mask = "255.255.255.0";
+            withAddress.Gateway = "192.168.168.1";
+            Add(checks, "ipdisplay_line_with_address",
+                IpDisplay.Line(withAddress) == "本机 IP：192.168.168.201　掩码 255.255.255.0　网关 192.168.168.1",
+                "got=" + IpDisplay.Line(withAddress));
+
+            AdapterInfo bareOnly = new AdapterInfo();
+            bareOnly.Name = "以太网";
+            bareOnly.Ip = "10.0.0.5";
+            Add(checks, "ipdisplay_line_without_mask_or_gateway",
+                IpDisplay.Line(bareOnly) == "本机 IP：10.0.0.5", "got=" + IpDisplay.Line(bareOnly));
+
+            AdapterInfo noAddress = new AdapterInfo();
+            noAddress.Name = "以太网";
+            noAddress.Ip = "";
+            noAddress.Mask = "255.255.255.0";
+            Add(checks, "ipdisplay_says_no_ip_when_absent",
+                IpDisplay.Line(noAddress) == IpDisplay.NoIpLine && IpDisplay.Line(null) == IpDisplay.NoIpLine,
+                "got=" + IpDisplay.Line(noAddress));
+            Add(checks, "ipdisplay_never_prints_partial_address",
+                !IpDisplay.Line(noAddress).Contains("255.255") && IpDisplay.NoIpLine == "本机 IP：没有（网线未插或未获取到地址）",
+                "got=" + IpDisplay.Line(noAddress));
+
+            Add(checks, "adapter_usable_requires_name_and_ipv4",
+                withAddress.UsableForNetsh && !noAddress.UsableForNetsh,
+                "withAddress=" + withAddress.UsableForNetsh + " noAddress=" + noAddress.UsableForNetsh);
+            AdapterInfo unnamed = new AdapterInfo();
+            unnamed.Ip = "192.168.168.9";
+            unnamed.Name = "";
+            Add(checks, "adapter_without_connection_name_is_not_usable", !unnamed.UsableForNetsh,
+                "netsh needs NetConnectionID; got=" + unnamed.UsableForNetsh);
+            Add(checks, "adapter_label_shows_missing_address",
+                noAddress.Label == "以太网  [无 IPv4]", "got=" + noAddress.Label);
             return checks;
         }
 

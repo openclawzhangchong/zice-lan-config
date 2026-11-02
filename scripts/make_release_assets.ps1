@@ -10,8 +10,11 @@ $stage = Join-Path $binDir "release-$Version"
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-$exe = Get-ChildItem -LiteralPath $binDir -Filter '*.exe' | Select-Object -First 1
+$exe = Get-ChildItem -LiteralPath $binDir -Filter '*.exe' |
+    Sort-Object { [version]$_.VersionInfo.FileVersion } -Descending | Select-Object -First 1
 if (-not $exe) { throw 'no exe in bin - run build.ps1 first' }
+$buildVersion = $exe.VersionInfo.FileVersion
+if ($buildVersion -ne "$Version.0") { throw "bin exe is v$buildVersion but assets were asked for v$Version - refusing to package the wrong binary" }
 Copy-Item -LiteralPath $exe.FullName -Destination $stage
 foreach ($doc in @('README.md', 'LICENSE', 'CHANGELOG.md')) {
     $path = Join-Path $root $doc

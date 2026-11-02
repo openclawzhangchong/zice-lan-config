@@ -25,12 +25,15 @@ namespace ZiceLan
         private Button btnApply;
         private Button btnDhcp;
         private Button btnWallpaper;
+        private Button btnWallBlack;
         private ComboBox cmbWallBackground;
         private ComboBox cmbWallText;
         private ProgressBar bar;
         private Label lblPhase;
         private Label lblStats;
         private Label lblSelected;
+        private Label lblIp;
+        private System.Windows.Forms.Timer _ipTimer;
         private ListBox lstFree;
         private TextBox txtLog;
 
@@ -50,7 +53,7 @@ namespace ZiceLan
         {
             Text = Product.Title + " " + Product.VersionText;
             Font = new Font("Microsoft YaHei", 9F);
-            ClientSize = new Size(1014, 614);
+            ClientSize = new Size(1014, 666);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -62,15 +65,35 @@ namespace ZiceLan
             {
             }
             BuildLayout();
-            Load += delegate { LoadAdapters(true); };
-            FormClosing += delegate { _cancelScan = true; };
+            Load += delegate
+            {
+                LoadAdapters(true);
+                _ipTimer = new System.Windows.Forms.Timer();
+                _ipTimer.Interval = 15000;
+                _ipTimer.Tick += delegate { if (!_busy) { RefreshIpLineFromNetwork(); } };
+                _ipTimer.Start();
+            };
+            FormClosing += delegate
+            {
+                _cancelScan = true;
+                if (_ipTimer != null)
+                {
+                    _ipTimer.Stop();
+                }
+            };
         }
 
         private void BuildLayout()
         {
+            lblIp = new Label();
+            lblIp.SetBounds(12, 8, 990, 26);
+            lblIp.Font = new Font("Microsoft YaHei", 12F, FontStyle.Bold);
+            lblIp.Text = IpDisplay.NoIpLine;
+            Controls.Add(lblIp);
+
             var cfg = new GroupBox();
             cfg.Text = "本机网卡与目标参数";
-            cfg.SetBounds(12, 8, 990, 148);
+            cfg.SetBounds(12, 38, 990, 148);
             Controls.Add(cfg);
 
             cfg.Controls.Add(MakeLabel("网卡", 16, 28, 34));
@@ -158,13 +181,16 @@ namespace ZiceLan
             cmbWallText.SelectedItem = "白";
             cfg.Controls.Add(cmbWallText);
 
-            btnWallpaper = MakeButton("生成并设为壁纸", 272, 85, 150, 26, delegate { GenerateWallpaper(true); });
+            btnWallpaper = MakeButton("生成并设为壁纸", 272, 85, 150, 26, delegate { GenerateWallpaper(false); });
             cfg.Controls.Add(btnWallpaper);
 
+            btnWallBlack = MakeButton("一键纯黑壁纸", 432, 85, 132, 26, delegate { GenerateWallpaper(true); });
+            cfg.Controls.Add(btnWallBlack);
+
             var wallpaperHint = new Label();
-            wallpaperHint.SetBounds(432, 90, 544, 20);
+            wallpaperHint.SetBounds(574, 90, 402, 20);
             wallpaperHint.ForeColor = Color.DimGray;
-            wallpaperHint.Text = "壁纸右上角打印当前 IP；写入成功或恢复自动获取后会自动换一张，这里也可以单独试。";
+            wallpaperHint.Text = "右上角打印当前 IP；写入成功或恢复自动获取后自动换。";
             cfg.Controls.Add(wallpaperHint);
 
             var note = new Label();
@@ -311,6 +337,7 @@ namespace ZiceLan
             btnApply.Enabled = !busy && _selectedOctet > 0;
             btnDhcp.Enabled = !busy;
             btnWallpaper.Enabled = !busy;
+            btnWallBlack.Enabled = !busy;
             cmbWallBackground.Enabled = !busy;
             cmbWallText.Enabled = !busy;
             cmbAdapter.Enabled = !busy;
@@ -347,9 +374,10 @@ namespace ZiceLan
             }
             if (_adapters.Count == 0)
             {
-                Log("没有找到带 IPv4 地址的网卡，请先连网线或确认本机已联网。");
+                Log("没有读到任何网卡信息（WMI 可能被禁用），请检查系统服务后重试。");
                 _current = null;
                 btnApply.Enabled = false;
+                RefreshIpLine();
                 return;
             }
             int chosen = 0;
@@ -378,6 +406,7 @@ namespace ZiceLan
                     + "，网关 " + _current.Gateway + "，DNS " + string.Join(",", _current.Dns.ToArray())
                     + (_current.DhcpEnabled ? "，自动获取已开启" : "，已是静态地址"));
             }
+            RefreshIpLine();
         }
 
         private void OnAdapterChanged(object sender, EventArgs e)
@@ -389,6 +418,7 @@ namespace ZiceLan
             }
             PrefillFromAdapter(_current);
             InvalidateScan(_suppressAdapterEvent ? string.Empty : "换了网卡，需要重新扫描。");
+            RefreshIpLine();
         }
 
         private void PrefillFromAdapter(AdapterInfo info)
@@ -566,6 +596,11 @@ namespace ZiceLan
             if (adapter == null)
             {
                 Log("先选一块网卡。");
+                return;
+            }
+            if (!IpCore.IsValidIpv4(adapter.Ip))
+            {
+                Log("这块网卡 " + adapter.Name + " 现在没有 IPv4 地址，扫了也不作数（本机还没进到任何网段里）。先连网再来。");
                 return;
             }
             int reserveTo = Convert.ToInt32(numReserve.Value);
@@ -756,27 +791,75 @@ namespace ZiceLan
             });
         }
 
-        private void GenerateWallpaper(bool setToDesktop)
+        private void RefreshIpLine()
+        {
+            AdapterInfo adapter = CurrentAdapter();
+            bool hasIp = adapter != null && IpCore.IsValidIpv4(adapter.Ip);
+            lblIp.Text = IpDisplay.Line(adapter);
+            lblIp.ForeColor = hasIp ? Color.Black : Color.Firebrick;
+        }
+
+        private void RefreshIpLineFromNetwork()
+        {
+            int wantedIndex = _current != null ? _current.Index : -1;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string error;
+                List<AdapterInfo> list = Adapters.Read(out error);
+                AdapterInfo found = null;
+                foreach (AdapterInfo info in list)
+                {
+                    if (info.Index == wantedIndex)
+                    {
+                        found = info;
+                        break;
+                    }
+                }
+                AdapterInfo result = found;
+                Ui(delegate
+                {
+                    if (result != null)
+                    {
+                        _current = result;
+                        AdapterInfo shown = CurrentAdapter();
+                        if (shown != null)
+                        {
+                            _adapters[cmbAdapter.SelectedIndex] = result;
+                        }
+                        RefreshIpLine();
+                    }
+                    else
+                    {
+                        RefreshIpLine();
+                    }
+                });
+            });
+        }
+
+        private void GenerateWallpaper(bool forceBlackWhite)
         {
             if (_busy)
             {
                 return;
             }
-            string ip = _current != null ? _current.Ip : string.Empty;
+            RefreshIpLine();
+            AdapterInfo adapter = CurrentAdapter();
+            string ip = adapter != null ? adapter.Ip : (_current != null ? _current.Ip : string.Empty);
             if (!IpCore.IsValidIpv4(ip))
             {
-                Log("现在没有可打印的 IP（网卡信息读不到），先点「刷新」。");
+                Log("这台机器现在没有可用的 IPv4 地址，壁纸不生成（否则只会印一个空地址）。先插网线或确认已取到地址再试。");
                 return;
             }
-            string background = Convert.ToString(cmbWallBackground.SelectedItem);
-            string textColor = Convert.ToString(cmbWallText.SelectedItem);
+            string background = forceBlackWhite ? "黑" : Convert.ToString(cmbWallBackground.SelectedItem);
+            string textColor = forceBlackWhite ? "白" : Convert.ToString(cmbWallText.SelectedItem);
             int width = WallpaperService.PrimaryScreenWidth;
             int height = WallpaperService.PrimaryScreenHeight;
-            Log("生成壁纸：" + WallpaperLayout.Caption(ip) + "，" + width + "x" + height + " 屏幕");
+            Log((forceBlackWhite ? "一键纯黑壁纸：" : "生成壁纸：") + WallpaperLayout.Caption(ip)
+                + "，" + width + "x" + height + " 屏幕");
             SetBusy(true, "生成壁纸");
             ThreadPool.QueueUserWorkItem(delegate
             {
-                WallpaperService.Apply(ip, background, textColor, width, height, setToDesktop, Log);
+                WallpaperService.Apply(ip, background, textColor, width, height, true, Log);
                 Ui(delegate { SetBusy(false, string.Empty); });
             });
         }

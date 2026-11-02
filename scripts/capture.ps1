@@ -69,7 +69,8 @@ public static class Win32Win
 '@
 
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Get-ChildItem -LiteralPath (Join-Path $root 'bin') -Filter '*.exe' | Select-Object -First 1
+$exe = Get-ChildItem -LiteralPath (Join-Path $root 'bin') -Filter '*.exe' |
+    Sort-Object { [version]$_.VersionInfo.FileVersion } -Descending | Select-Object -First 1
 if (-not $exe) { throw 'no exe in bin - run build.ps1 first' }
 $ver = (Get-Item -LiteralPath $exe.FullName).VersionInfo.ProductVersion
 $screenDir = Join-Path $root 'docs\screens'
@@ -135,15 +136,18 @@ foreach ($h in $kids) {
 
 if ($WallpaperOnly) {
     Click-Child $proc.MainWindowHandle '*生成并设为壁纸*' | Out-Null
-    Write-Output 'INVOKED=wallpaper(BM_CLICK)'
-    Start-Sleep -Seconds 10
+    Write-Output 'INVOKED=wallpaper-dropdown-colors(BM_CLICK)'
+    Start-Sleep -Seconds 8
+    Click-Child $proc.MainWindowHandle '*一键纯黑壁纸*' | Out-Null
+    Write-Output 'INVOKED=wallpaper-forced-black(BM_CLICK)'
+    Start-Sleep -Seconds 18
     Save-Png $proc.MainWindowHandle $OutPng
     $null = $proc.CloseMainWindow()
     Start-Sleep -Seconds 2
     if (-not $proc.HasExited) { $proc.Kill() }
     $wallLog = Get-ChildItem -LiteralPath (Join-Path $root 'bin\logs') -Filter 'run-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
     if ($wallLog) {
-        Get-Content -LiteralPath $wallLog.FullName -Encoding UTF8 | Select-Object -Last 4 | ForEach-Object { Write-Output ('  log: ' + $_) }
+        Get-Content -LiteralPath $wallLog.FullName -Encoding UTF8 | Select-Object -Last 7 | ForEach-Object { Write-Output ('  log: ' + $_) }
     }
     Write-Output 'CLOSED=ok'
     return
