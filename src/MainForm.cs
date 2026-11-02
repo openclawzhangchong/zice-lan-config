@@ -24,6 +24,9 @@ namespace ZiceLan
         private Button btnStop;
         private Button btnApply;
         private Button btnDhcp;
+        private Button btnWallpaper;
+        private ComboBox cmbWallBackground;
+        private ComboBox cmbWallText;
         private ProgressBar bar;
         private Label lblPhase;
         private Label lblStats;
@@ -47,7 +50,7 @@ namespace ZiceLan
         {
             Text = Product.Title + " " + Product.VersionText;
             Font = new Font("Microsoft YaHei", 9F);
-            ClientSize = new Size(1014, 584);
+            ClientSize = new Size(1014, 614);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -67,7 +70,7 @@ namespace ZiceLan
         {
             var cfg = new GroupBox();
             cfg.Text = "本机网卡与目标参数";
-            cfg.SetBounds(12, 8, 990, 118);
+            cfg.SetBounds(12, 8, 990, 148);
             Controls.Add(cfg);
 
             cfg.Controls.Add(MakeLabel("网卡", 16, 28, 34));
@@ -133,15 +136,46 @@ namespace ZiceLan
             numReserve.SetBounds(926, 56, 50, 24);
             cfg.Controls.Add(numReserve);
 
+            cfg.Controls.Add(MakeLabel("壁纸底色", 16, 90, 56));
+            cmbWallBackground = new ComboBox();
+            cmbWallBackground.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbWallBackground.SetBounds(74, 86, 64, 24);
+            foreach (string colorName in WallpaperLayout.ColorNames())
+            {
+                cmbWallBackground.Items.Add(colorName);
+            }
+            cmbWallBackground.SelectedItem = "黑";
+            cfg.Controls.Add(cmbWallBackground);
+
+            cfg.Controls.Add(MakeLabel("文字色", 146, 90, 50));
+            cmbWallText = new ComboBox();
+            cmbWallText.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbWallText.SetBounds(198, 86, 64, 24);
+            foreach (string colorName in WallpaperLayout.ColorNames())
+            {
+                cmbWallText.Items.Add(colorName);
+            }
+            cmbWallText.SelectedItem = "白";
+            cfg.Controls.Add(cmbWallText);
+
+            btnWallpaper = MakeButton("生成并设为壁纸", 272, 85, 150, 26, delegate { GenerateWallpaper(true); });
+            cfg.Controls.Add(btnWallpaper);
+
+            var wallpaperHint = new Label();
+            wallpaperHint.SetBounds(432, 90, 544, 20);
+            wallpaperHint.ForeColor = Color.DimGray;
+            wallpaperHint.Text = "壁纸右上角打印当前 IP；写入成功或恢复自动获取后会自动换一张，这里也可以单独试。";
+            cfg.Controls.Add(wallpaperHint);
+
             var note = new Label();
-            note.SetBounds(16, 88, 960, 20);
+            note.SetBounds(16, 116, 960, 20);
             note.ForeColor = Color.DimGray;
             note.Text = "掩码 / 网关 / DNS 默认沿用本机当前值，只有末段会被换掉；保留末段填 0 = 连路由器一起扫；网段框也可以自己填别的段。";
             cfg.Controls.Add(note);
 
             var scanBox = new GroupBox();
             scanBox.Text = "空余 IP";
-            scanBox.SetBounds(12, 132, 500, 306);
+            scanBox.SetBounds(12, 162, 500, 306);
             Controls.Add(scanBox);
 
             btnScan = MakeButton("1 开始扫描", 16, 24, 112, 30, delegate { StartScan(); });
@@ -179,7 +213,7 @@ namespace ZiceLan
 
             var logBox = new GroupBox();
             logBox.Text = "运行日志（同时写入文件，便于排查）";
-            logBox.SetBounds(520, 132, 482, 306);
+            logBox.SetBounds(520, 162, 482, 306);
             Controls.Add(logBox);
 
             txtLog = new TextBox();
@@ -191,27 +225,27 @@ namespace ZiceLan
             logBox.Controls.Add(txtLog);
 
             lblSelected = new Label();
-            lblSelected.SetBounds(12, 448, 990, 22);
+            lblSelected.SetBounds(12, 478, 990, 22);
             lblSelected.Font = new Font("Microsoft YaHei", 11F, FontStyle.Bold);
             lblSelected.Text = "还没选中地址";
             Controls.Add(lblSelected);
 
-            btnApply = MakeButton("3 写入静态 IP 并应用", 12, 474, 232, 40, delegate { StartApply(); });
+            btnApply = MakeButton("3 写入静态 IP 并应用", 12, 504, 232, 40, delegate { StartApply(); });
             btnApply.Enabled = false;
             Controls.Add(btnApply);
 
-            btnDhcp = MakeButton("恢复自动获取 IP（回退）", 254, 474, 212, 40, delegate { StartDhcpRestore(); });
+            btnDhcp = MakeButton("恢复自动获取 IP（回退）", 254, 504, 212, 40, delegate { StartDhcpRestore(); });
             Controls.Add(btnDhcp);
 
             var lblVersion = new Label();
-            lblVersion.SetBounds(700, 484, 302, 20);
+            lblVersion.SetBounds(700, 514, 302, 20);
             lblVersion.Text = Product.Title + " " + Product.VersionText;
             lblVersion.TextAlign = ContentAlignment.MiddleRight;
             lblVersion.ForeColor = Color.DimGray;
             Controls.Add(lblVersion);
 
             var lblWarn = new Label();
-            lblWarn.SetBounds(12, 522, 990, 54);
+            lblWarn.SetBounds(12, 552, 990, 54);
             lblWarn.ForeColor = Color.Firebrick;
             lblWarn.Text = "注意：改 IP 会让网络瞬断几秒，远程桌面 / 向日葵会掉线，需要用新地址重连。" + Environment.NewLine
                 + "写入前会对目标地址再做一次 ARP 双采样复核；万一改完连不上，用另一台机器或本地登录点「恢复自动获取 IP」即可回退。" + Environment.NewLine
@@ -276,6 +310,9 @@ namespace ZiceLan
             btnRandom.Enabled = !busy && _scan != null && _scan.Free.Count > 0;
             btnApply.Enabled = !busy && _selectedOctet > 0;
             btnDhcp.Enabled = !busy;
+            btnWallpaper.Enabled = !busy;
+            cmbWallBackground.Enabled = !busy;
+            cmbWallText.Enabled = !busy;
             cmbAdapter.Enabled = !busy;
             cmbPrefix.Enabled = !busy;
             cmbDnsPreset.Enabled = !busy;
@@ -707,15 +744,57 @@ namespace ZiceLan
                         LoadAdapters(false);
                         _selectedOctet = -1;
                         UpdateSelectedLabel();
+                        MessageBox.Show(this, report.Message, "已生效",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        RefreshWallpaperFor(newIp);
+                        return;
                     }
-                    else
-                    {
-                        Log("写入未确认：" + report.Message);
-                    }
-                    MessageBox.Show(this, report.Message, report.Success ? "已生效" : "没成功",
-                        MessageBoxButtons.OK,
-                        report.Success ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+                    Log("写入未确认：" + report.Message);
+                    MessageBox.Show(this, report.Message, "没成功",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                 });
+            });
+        }
+
+        private void GenerateWallpaper(bool setToDesktop)
+        {
+            if (_busy)
+            {
+                return;
+            }
+            string ip = _current != null ? _current.Ip : string.Empty;
+            if (!IpCore.IsValidIpv4(ip))
+            {
+                Log("现在没有可打印的 IP（网卡信息读不到），先点「刷新」。");
+                return;
+            }
+            string background = Convert.ToString(cmbWallBackground.SelectedItem);
+            string textColor = Convert.ToString(cmbWallText.SelectedItem);
+            int width = WallpaperService.PrimaryScreenWidth;
+            int height = WallpaperService.PrimaryScreenHeight;
+            Log("生成壁纸：" + WallpaperLayout.Caption(ip) + "，" + width + "x" + height + " 屏幕");
+            SetBusy(true, "生成壁纸");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                WallpaperService.Apply(ip, background, textColor, width, height, setToDesktop, Log);
+                Ui(delegate { SetBusy(false, string.Empty); });
+            });
+        }
+
+        private void RefreshWallpaperFor(string ip)
+        {
+            if (!IpCore.IsValidIpv4(ip))
+            {
+                Log("拿不到生效后的 IP，壁纸没刷新。");
+                return;
+            }
+            string background = Convert.ToString(cmbWallBackground.SelectedItem);
+            string textColor = Convert.ToString(cmbWallText.SelectedItem);
+            int width = WallpaperService.PrimaryScreenWidth;
+            int height = WallpaperService.PrimaryScreenHeight;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                WallpaperService.Apply(ip, background, textColor, width, height, true, Log);
             });
         }
 
@@ -751,6 +830,10 @@ namespace ZiceLan
                     LoadAdapters(false);
                     MessageBox.Show(this, report.Message, report.Success ? "已恢复自动获取" : "请确认网络",
                         MessageBoxButtons.OK, report.Success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                    if (_current != null)
+                    {
+                        RefreshWallpaperFor(_current.Ip);
+                    }
                 });
             });
         }

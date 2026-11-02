@@ -48,29 +48,25 @@ namespace ZiceLan
 
         private static void ResolvePath()
         {
-            string name = Product.Title;
-            string stamp = DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-            string[] roots = new string[]
+            string error;
+            string root = AppPaths.EnsureDir("logs", out error);
+            if (root == null)
             {
-                Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "logs"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), name, "logs")
-            };
-            foreach (string root in roots)
-            {
-                try
-                {
-                    Directory.CreateDirectory(root);
-                    string candidate = Path.Combine(root, "run-" + stamp + ".log");
-                    File.AppendAllText(candidate, string.Empty, Encoding.UTF8);
-                    _path = candidate;
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    _pathError = ex.Message;
-                }
+                _pathError = error;
+                _path = null;
+                return;
             }
-            _path = null;
+            string stamp = DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            try
+            {
+                _path = Path.Combine(root, "run-" + stamp + ".log");
+                File.AppendAllText(_path, string.Empty, Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                _pathError = ex.Message;
+                _path = null;
+            }
         }
     }
 }

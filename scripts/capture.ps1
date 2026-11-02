@@ -2,7 +2,8 @@
     [int]$WaitSeconds = 85,
     [int]$StopAfterSeconds = 0,
     [string]$OutPng = '',
-    [switch]$IncludeApplyDialog
+    [switch]$IncludeApplyDialog,
+    [switch]$WallpaperOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -130,6 +131,22 @@ Write-Output ('CHILD_CONTROLS=' + $kids.Count)
 foreach ($h in $kids) {
     $text = [Win32Win]::TextOf($h)
     if ($text) { Write-Output ('  control: [' + ($text -replace "`r?`n", ' / ') + ']') }
+}
+
+if ($WallpaperOnly) {
+    Click-Child $proc.MainWindowHandle '*生成并设为壁纸*' | Out-Null
+    Write-Output 'INVOKED=wallpaper(BM_CLICK)'
+    Start-Sleep -Seconds 10
+    Save-Png $proc.MainWindowHandle $OutPng
+    $null = $proc.CloseMainWindow()
+    Start-Sleep -Seconds 2
+    if (-not $proc.HasExited) { $proc.Kill() }
+    $wallLog = Get-ChildItem -LiteralPath (Join-Path $root 'bin\logs') -Filter 'run-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
+    if ($wallLog) {
+        Get-Content -LiteralPath $wallLog.FullName -Encoding UTF8 | Select-Object -Last 4 | ForEach-Object { Write-Output ('  log: ' + $_) }
+    }
+    Write-Output 'CLOSED=ok'
+    return
 }
 
 Click-Child $proc.MainWindowHandle '*开始扫描*' | Out-Null

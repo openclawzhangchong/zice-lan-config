@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Net.NetworkInformation;
@@ -182,7 +183,7 @@ namespace ZiceLan
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(exePath);
             Add(checks, "file_version_stamped", version.FileVersion == Product.FileVersion,
                 "expected=" + Product.FileVersion + " got=" + version.FileVersion + " exe=" + Path.GetFileName(exePath));
-            Add(checks, "version_text_is_v1_3", Product.VersionText == "v1.3", "got=" + Product.VersionText);
+            Add(checks, "version_text_is_v1_4", Product.VersionText == "v1.4", "got=" + Product.VersionText);
             Add(checks, "title_is_zice", Product.Title == "智策学校局域网配置软件", "got=" + Product.Title);
 
             List<SubnetPreset> subnets = SubnetPresets.All();
@@ -227,6 +228,126 @@ namespace ZiceLan
                 Browser.NormalizeUrl("192.168.168.1") == "http://192.168.168.1"
                     && Browser.NormalizeUrl("192.168.168.999").Length == 0,
                 "got=" + Browser.NormalizeUrl("192.168.168.1") + " / " + Browser.NormalizeUrl("192.168.168.999"));
+
+            Add(checks, "wallpaper_caption_exact",
+                WallpaperLayout.Caption("192.168.168.201") == "当前 IP：192.168.168.201",
+                "got=" + WallpaperLayout.Caption("192.168.168.201"));
+            Add(checks, "wallpaper_filename_per_ip",
+                WallpaperLayout.FileNameFor("192.168.168.201") == "ip-192.168.168.201.png"
+                    && WallpaperLayout.FileNameFor("") == "ip-unknown.png",
+                "got=" + WallpaperLayout.FileNameFor("192.168.168.201"));
+
+            List<ColorPreset> colors = WallpaperLayout.Colors();
+            Add(checks, "wallpaper_color_presets", colors.Count == 8
+                    && WallpaperLayout.FindColor("黑").R == 0 && WallpaperLayout.FindColor("黑").G == 0 && WallpaperLayout.FindColor("黑").B == 0
+                    && WallpaperLayout.FindColor("白").R == 255 && WallpaperLayout.FindColor("白").B == 255
+                    && WallpaperLayout.FindColor("亮黄").Hex == "#FFD600"
+                    && WallpaperLayout.FindColor("不存在") == null,
+                "count=" + colors.Count + " 亮黄=" + WallpaperLayout.FindColor("亮黄").Hex);
+            Add(checks, "wallpaper_default_is_black_white",
+                WallpaperLayout.BackgroundOrDefault("乱写的颜色").Name == "黑"
+                    && WallpaperLayout.TextOrDefault(null).Name == "白",
+                "unknown names must fall back to black background / white text");
+
+            Add(checks, "wallpaper_font_scale_at_reference",
+                WallpaperLayout.ScaleFor(1920, 1080) == 1.0 && WallpaperLayout.BaseFontSize(1920, 1080) == 48,
+                "1920 must be scale 1.0 / font 48px");
+            Add(checks, "wallpaper_font_scale_across_resolutions",
+                WallpaperLayout.BaseFontSize(3840, 2160) == 96
+                    && WallpaperLayout.BaseFontSize(2560, 1440) == 64
+                    && WallpaperLayout.BaseFontSize(1366, 768) == 34
+                    && WallpaperLayout.BaseFontSize(1080, 1920) == 27
+                    && WallpaperLayout.BaseFontSize(320, 240) == 24
+                    && WallpaperLayout.BaseFontSize(7680, 4320) == 144,
+                "4k=" + WallpaperLayout.BaseFontSize(3840, 2160)
+                    + " 2k=" + WallpaperLayout.BaseFontSize(2560, 1440)
+                    + " 1366=" + WallpaperLayout.BaseFontSize(1366, 768)
+                    + " portrait=" + WallpaperLayout.BaseFontSize(1080, 1920)
+                    + " tiny=" + WallpaperLayout.BaseFontSize(320, 240)
+                    + " 8k=" + WallpaperLayout.BaseFontSize(7680, 4320));
+            Add(checks, "wallpaper_margin_three_percent_with_floor",
+                WallpaperLayout.MarginFor(1920) == 58 && WallpaperLayout.MarginFor(100) == 16
+                    && WallpaperLayout.MaxTextWidth(1920) == 1920 - 58 * 2,
+                "1920 margin=" + WallpaperLayout.MarginFor(1920) + " maxTextWidth=" + WallpaperLayout.MaxTextWidth(1920));
+
+            WallpaperLayout.MeasureWidth fakeMeasure = delegate(string text2, int size)
+            {
+                return text2.Length * size / 2;
+            };
+            string caption = WallpaperLayout.Caption("192.168.168.201");
+            int untouched = WallpaperLayout.FitFontSize(caption, 48, 1000, fakeMeasure);
+            int shrunk = WallpaperLayout.FitFontSize(caption, 48, 300, fakeMeasure);
+            Add(checks, "wallpaper_fit_keeps_size_when_it_fits", untouched == 48, "got=" + untouched);
+            Add(checks, "wallpaper_fit_shrinks_stepwise",
+                shrunk == 26 && fakeMeasure(caption, shrunk) <= 300 && fakeMeasure(caption, shrunk + 3) > 300,
+                "expected=26 got=" + shrunk + " measured=" + fakeMeasure(caption, shrunk)
+                    + " captionLength=" + caption.Length);
+            Add(checks, "wallpaper_fit_never_below_floor",
+                WallpaperLayout.FitFontSize(caption, 48, 10, fakeMeasure) == WallpaperLayout.MinFontSize,
+                "got=" + WallpaperLayout.FitFontSize(caption, 48, 10, fakeMeasure));
+
+            RenderMeta meta = new RenderMeta();
+            using (var bitmap = WallpaperRenderer.Render("192.168.168.201",
+                WallpaperLayout.FindColor("黑"), WallpaperLayout.FindColor("白"), 640, 400, meta))
+            {
+                Color corner = bitmap.GetPixel(2, 2);
+                bool foundTextPixel = false;
+                for (int y = 0; y < 120 && !foundTextPixel; y++)
+                {
+                    for (int x = 320; x < 640 && !foundTextPixel; x++)
+                    {
+                        Color pixel = bitmap.GetPixel(x, y);
+                        if (pixel.R > 200 && pixel.G > 200 && pixel.B > 200)
+                        {
+                            foundTextPixel = true;
+                        }
+                    }
+                }
+                Add(checks, "wallpaper_render_black_bg_white_text",
+                    corner.R == 0 && corner.G == 0 && corner.B == 0 && foundTextPixel
+                        && meta.FontSize >= WallpaperLayout.MinFontSize && meta.FontSize <= 48,
+                "corner=" + corner.R + "," + corner.G + "," + corner.B
+                        + " textPixel=" + foundTextPixel + " fontSize=" + meta.FontSize + " font=" + meta.FontFamily);
+            }
+            using (var inverted = WallpaperRenderer.Render("192.168.168.201",
+                WallpaperLayout.FindColor("白"), WallpaperLayout.FindColor("黑"), 640, 400, new RenderMeta()))
+            {
+                Color corner = inverted.GetPixel(2, 2);
+                bool foundDarkPixel = false;
+                for (int y = 0; y < 120 && !foundDarkPixel; y++)
+                {
+                    for (int x = 320; x < 640 && !foundDarkPixel; x++)
+                    {
+                        Color pixel = inverted.GetPixel(x, y);
+                        if (pixel.R < 60 && pixel.G < 60 && pixel.B < 60)
+                        {
+                            foundDarkPixel = true;
+                        }
+                    }
+                }
+                Add(checks, "wallpaper_render_honours_chosen_colors",
+                    corner.R == 255 && corner.G == 255 && corner.B == 255 && foundDarkPixel,
+                    "corner=" + corner.R + "," + corner.G + "," + corner.B + " darkPixel=" + foundDarkPixel);
+            }
+            int keepWidth = 1920;
+            int keepHeight = 1080;
+            bool badParse = WallpaperCli.TryParseSize("垃圾输入", ref keepWidth, ref keepHeight);
+            bool emptyParse = WallpaperCli.TryParseSize("", ref keepWidth, ref keepHeight);
+            bool tinyParse = WallpaperCli.TryParseSize("60x40", ref keepWidth, ref keepHeight);
+            Add(checks, "cli_size_parse_preserves_screen_on_failure",
+                !badParse && !emptyParse && !tinyParse && keepWidth == 1920 && keepHeight == 1080,
+                "after failed parses width=" + keepWidth + " height=" + keepHeight);
+            bool goodParse = WallpaperCli.TryParseSize("1366x768", ref keepWidth, ref keepHeight);
+            Add(checks, "cli_size_parse_applies_valid_size",
+                goodParse && keepWidth == 1366 && keepHeight == 768,
+                "got=" + keepWidth + "x" + keepHeight);
+            string[] sample = new string[] { "--scan", "--size=1366x768", "--bg", "深蓝", "--ip=192.168.168.201" };
+            Add(checks, "cli_reads_inline_and_spaced_flags",
+                Cli.Value(sample, "--size", string.Empty) == "1366x768"
+                    && Cli.Value(sample, "--bg", string.Empty) == "深蓝"
+                    && Cli.Value(sample, "--ip", string.Empty) == "192.168.168.201"
+                    && Cli.Value(sample, "--missing", "默认值") == "默认值",
+                "size=" + Cli.Value(sample, "--size", "-") + " bg=" + Cli.Value(sample, "--bg", "-"));
             return checks;
         }
 

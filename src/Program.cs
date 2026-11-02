@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
@@ -9,6 +10,7 @@ namespace ZiceLan
 {
     internal static class Program
     {
+        [STAThread]
         private static int Main(string[] args)
         {
             Application.EnableVisualStyles();
@@ -21,6 +23,10 @@ namespace ZiceLan
             if (mode == "--scan")
             {
                 return ScanCli.Run(Cli.OutPath(args, "scan.txt"), args);
+            }
+            if (mode == "--wallpaper")
+            {
+                return WallpaperCli.Run(Cli.OutPath(args, "wallpaper.txt"), args);
             }
             if (mode == "--version")
             {
@@ -36,11 +42,16 @@ namespace ZiceLan
     {
         public static string Value(string[] args, string flag, string fallback)
         {
-            for (int i = 0; i < args.Length - 1; i++)
+            string inline = flag + "=";
+            for (int i = 0; i < args.Length; i++)
             {
-                if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 {
                     return args[i + 1];
+                }
+                if (args[i].StartsWith(inline, StringComparison.OrdinalIgnoreCase))
+                {
+                    return args[i].Substring(inline.Length);
                 }
             }
             return fallback;
@@ -48,13 +59,6 @@ namespace ZiceLan
 
         public static string OutPath(string[] args, string defaultName)
         {
-            foreach (string arg in args)
-            {
-                if (arg.StartsWith("--out=", StringComparison.OrdinalIgnoreCase))
-                {
-                    return Path.GetFullPath(arg.Substring(6));
-                }
-            }
             string explicitPath = Value(args, "--out", null);
             if (!string.IsNullOrEmpty(explicitPath))
             {
@@ -178,6 +182,103 @@ namespace ZiceLan
                 text = text + " ...(" + octets.Count + " total)";
             }
             return text;
+        }
+    }
+
+    public static class WallpaperCli
+    {
+        public static int Run(string outFile, string[] args)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("MODE=wallpaper");
+            sb.AppendLine("PRODUCT=" + Product.Title + " " + Product.VersionText);
+
+            string ip = Cli.Value(args, "--ip", null);
+            if (!IpCore.IsValidIpv4(ip))
+            {
+                ip = FirstAdapterIp();
+            }
+            if (!IpCore.IsValidIpv4(ip))
+            {
+                sb.AppendLine("ERROR=no usable ip");
+                File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(true));
+                return 2;
+            }
+
+            ScreenSize screen = WallpaperService.ResolveScreen();
+            int width = screen.Width;
+            int height = screen.Height;
+            string source = screen.Source;
+            bool forced = TryParseSize(Cli.Value(args, "--size", string.Empty), ref width, ref height);
+            if (forced)
+            {
+                source = "forced";
+            }
+            sb.AppendLine("SCREEN " + source + " " + width + "x" + height);
+
+            string background = Cli.Value(args, "--bg", "黑");
+            string text = Cli.Value(args, "--fg", "白");
+            bool apply = true;
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, "--no-apply", StringComparison.OrdinalIgnoreCase))
+                {
+                    apply = false;
+                }
+            }
+
+            WallpaperReport report = WallpaperService.Apply(ip, background, text, width, height, apply,
+                delegate(string line) { sb.AppendLine("LOG " + line); });
+            sb.AppendLine("WALLPAPER ip=" + ip + " size=" + width + "x" + height + " bg=" + background
+                + " fg=" + text + " generated=" + report.Generated + " applied=" + report.Applied
+                + " set_to_desktop=" + apply + " path=" + report.FilePath);
+            sb.AppendLine("DETAIL=" + report.Detail);
+            File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(true));
+            return report.Generated ? 0 : 1;
+        }
+
+        // ref, not out: a failed parse must leave the caller's screen size untouched.
+        public static bool TryParseSize(string sizeText, ref int width, ref int height)
+        {
+            if (string.IsNullOrEmpty(sizeText))
+            {
+                return false;
+            }
+            string[] parts = sizeText.ToLowerInvariant().Split('x');
+            if (parts.Length != 2)
+            {
+                return false;
+            }
+            int parsedWidth;
+            int parsedHeight;
+            if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out parsedWidth))
+            {
+                return false;
+            }
+            if (!int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out parsedHeight))
+            {
+                return false;
+            }
+            if (parsedWidth < 160 || parsedHeight < 120 || parsedWidth > 10000 || parsedHeight > 10000)
+            {
+                return false;
+            }
+            width = parsedWidth;
+            height = parsedHeight;
+            return true;
+        }
+        private static string FirstAdapterIp()
+        {
+            string error;
+            List<AdapterInfo> list = Adapters.Read(out error);
+            foreach (AdapterInfo info in list)
+            {
+                if (IpCore.IsValidIpv4(info.Ip))
+                {
+                    return info.Ip;
+                }
+            }
+            return string.Empty;
         }
     }
 }
