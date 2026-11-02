@@ -9,6 +9,7 @@ namespace ZiceLan
         public int Index;
         public int InterfaceIndex;
         public string Name = string.Empty;
+        public string Guid = string.Empty;
         public string Description = string.Empty;
         public string Ip = string.Empty;
         public string Mask = string.Empty;
@@ -52,7 +53,7 @@ namespace ZiceLan
             try
             {
                 using (var searcher = new ManagementObjectSearcher("root\\cimv2",
-                    "SELECT Index, InterfaceIndex, Description, IPAddress, IPSubnet, DefaultIPGateway, DNSServerSearchOrder, DHCPEnabled FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled=TRUE"))
+                    "SELECT Index, InterfaceIndex, SettingID, Description, IPAddress, IPSubnet, DefaultIPGateway, DNSServerSearchOrder, DHCPEnabled FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled=TRUE"))
                 using (ManagementObjectCollection found = searcher.Get())
                 {
                     foreach (ManagementObject obj in found)
@@ -109,6 +110,22 @@ namespace ZiceLan
             return list;
         }
 
+        public static string FirstValidIp(List<AdapterInfo> adapters)
+        {
+            if (adapters == null)
+            {
+                return string.Empty;
+            }
+            foreach (AdapterInfo info in adapters)
+            {
+                if (IpCore.IsValidIpv4(info.Ip))
+                {
+                    return info.Ip;
+                }
+            }
+            return string.Empty;
+        }
+
         public static AdapterInfo FindByIndex(int index, string preferIp)
         {
             string error;
@@ -150,6 +167,7 @@ namespace ZiceLan
             var info = new AdapterInfo();
             info.Index = index;
             info.InterfaceIndex = ToIndex(obj["InterfaceIndex"]);
+            info.Guid = ToText(obj["SettingID"]);
             info.Description = ToText(obj["Description"]);
             info.DhcpEnabled = ToBool(obj["DHCPEnabled"]);
             info.Gateway = FirstIpv4(obj["DefaultIPGateway"] as string[]);

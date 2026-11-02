@@ -3,7 +3,8 @@
     [int]$StopAfterSeconds = 0,
     [string]$OutPng = '',
     [switch]$IncludeApplyDialog,
-    [switch]$WallpaperOnly
+    [switch]$WallpaperOnly,
+    [switch]$HotspotOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +32,24 @@ public static class Win32Win
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
+
+    public struct POINT { public int X; public int Y; }
+
+    public static IntPtr MakeLParam(int x, int y)
+    {
+        return (IntPtr)((y << 16) | (x & 0xFFFF));
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    public static string ClassOf(IntPtr hWnd)
+    {
+        var sb = new StringBuilder(256);
+        GetClassName(hWnd, sb, 256);
+        return sb.ToString();
+    }
 
     public static List<IntPtr> ChildWindows(IntPtr parent)
     {
@@ -132,6 +151,56 @@ Write-Output ('CHILD_CONTROLS=' + $kids.Count)
 foreach ($h in $kids) {
     $text = [Win32Win]::TextOf($h)
     if ($text) { Write-Output ('  control: [' + ($text -replace "`r?`n", ' / ') + ']') }
+}
+
+if ($HotspotOnly) {
+    $scopeKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters'
+    $scopeBefore = (Get-ItemProperty -LiteralPath $scopeKey).ScopeAddress
+    Write-Output ('SCOPE_BEFORE=' + $scopeBefore)
+    Click-Child $proc.MainWindowHandle '*算建议段*' | Out-Null
+    Write-Output 'INVOKED=hotspot-advice(BM_CLICK)'
+    Start-Sleep -Seconds 25
+    $listBox = [IntPtr]::Zero
+    $listBoxTop = -1
+    foreach ($h in [Win32Win]::ChildWindows($proc.MainWindowHandle)) {
+        if ([Win32Win]::ClassOf($h) -like '*LISTBOX*') {
+            $r = New-Object WinRect
+            $null = [Win32Win]::GetWindowRect($h, [ref]$r)
+            # two listboxes exist (free-IP list above, hotspot list below); take the lower one
+            if ($r.Top -gt $listBoxTop) { $listBoxTop = $r.Top; $listBox = $h }
+        }
+    }
+    if ($listBox -eq [IntPtr]::Zero) { throw 'hotspot suggestion listbox not found' }
+    $null = [Win32Win]::PostMessage($listBox, 0x0201, [IntPtr]0x0001, [Win32Win]::MakeLParam(30, 12))
+    $null = [Win32Win]::PostMessage($listBox, 0x0202, [IntPtr]::Zero, [Win32Win]::MakeLParam(30, 12))
+    Write-Output 'INVOKED=list-select(WM_LBUTTONDOWN)'
+    Start-Sleep -Seconds 2
+    Save-Png $proc.MainWindowHandle $OutPng
+    Click-Child $proc.MainWindowHandle '*写入选中段*' | Out-Null
+    Write-Output 'INVOKED=hotspot-apply(BM_CLICK)'
+    Start-Sleep -Seconds 3
+    $dialog = [IntPtr]::Zero
+    foreach ($top in [Win32Win]::TopWindows($proc.Id)) {
+        if ([Win32Win]::TextOf($top) -like '*确认修改热点网段*') { $dialog = $top }
+    }
+    if ($dialog -eq [IntPtr]::Zero) { throw 'hotspot confirm dialog did not open' }
+    Save-Png $dialog (Join-Path $screenDir "confirm-hotspot-$ver.png")
+    Click-Child $dialog '*否*' | Out-Null
+    Write-Output 'INVOKED=cancel(否)'
+    Start-Sleep -Seconds 3
+    $null = $proc.CloseMainWindow()
+    Start-Sleep -Seconds 2
+    if (-not $proc.HasExited) { $proc.Kill() }
+    $scopeAfter = (Get-ItemProperty -LiteralPath $scopeKey).ScopeAddress
+    Write-Output ('SCOPE_AFTER=' + $scopeAfter)
+    if ($scopeBefore -ne $scopeAfter) { throw 'HOTSPOT SCOPE CHANGED on the cancel path' }
+    Write-Output 'SCOPE_UNCHANGED=ok'
+    $hotLog = Get-ChildItem -LiteralPath (Join-Path $root 'bin\logs') -Filter 'run-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
+    if ($hotLog) {
+        Get-Content -LiteralPath $hotLog.FullName -Encoding UTF8 | Select-Object -Last 5 | ForEach-Object { Write-Output ('  log: ' + $_) }
+    }
+    Write-Output 'CLOSED=ok'
+    return
 }
 
 if ($WallpaperOnly) {

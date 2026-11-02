@@ -183,7 +183,7 @@ namespace ZiceLan
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(exePath);
             Add(checks, "file_version_stamped", version.FileVersion == Product.FileVersion,
                 "expected=" + Product.FileVersion + " got=" + version.FileVersion + " exe=" + Path.GetFileName(exePath));
-            Add(checks, "version_text_is_v1_5", Product.VersionText == "v1.5", "got=" + Product.VersionText);
+            Add(checks, "version_text_is_v1_6", Product.VersionText == "v1.6", "got=" + Product.VersionText);
             Add(checks, "title_is_zice", Product.Title == "智策学校局域网配置软件", "got=" + Product.Title);
 
             List<SubnetPreset> subnets = SubnetPresets.All();
@@ -384,6 +384,122 @@ namespace ZiceLan
                 "netsh needs NetConnectionID; got=" + unnamed.UsableForNetsh);
             Add(checks, "adapter_label_shows_missing_address",
                 noAddress.Label == "以太网  [无 IPv4]", "got=" + noAddress.Label);
+            Add(checks, "hotspot_gateway_and_octet_roundtrip",
+                HotspotAdvisor.GatewayFor(227) == "192.168.227.1"
+                    && HotspotAdvisor.OctetFromGateway("192.168.227.1") == 227
+                    && HotspotAdvisor.OctetFromGateway("192.168.227.5") == -1
+                    && HotspotAdvisor.OctetFromGateway("垃圾") == -1
+                    && HotspotAdvisor.ThirdOctetOf("192.168.137.1") == 137,
+                "227 -> " + HotspotAdvisor.GatewayFor(227) + " ; .5 -> " + HotspotAdvisor.OctetFromGateway("192.168.227.5"));
+
+            var hotspotAdapters = new List<AdapterInfo>();
+            AdapterInfo lan = new AdapterInfo();
+            lan.Name = "以太网";
+            lan.Ip = "192.168.168.201";
+            hotspotAdapters.Add(lan);
+            AdapterInfo ap = new AdapterInfo();
+            ap.Name = "本地连接* 9";
+            ap.Ip = "192.168.137.1";
+            hotspotAdapters.Add(ap);
+            AdapterInfo other = new AdapterInfo();
+            other.Name = "其他";
+            other.Ip = "10.1.2.3";
+            hotspotAdapters.Add(other);
+            AdapterInfo blank = new AdapterInfo();
+            blank.Name = "无地址";
+            blank.Ip = "";
+            hotspotAdapters.Add(blank);
+            HashSet<int> usedOctets = HotspotAdvisor.UsedThirdOctets(hotspotAdapters);
+            Add(checks, "hotspot_used_octets_only_same_family",
+                usedOctets.Count == 2 && usedOctets.Contains(168) && usedOctets.Contains(137) && !usedOctets.Contains(1),
+                "count=" + usedOctets.Count);
+
+            List<HotspotCandidate> top5 = HotspotAdvisor.Rank(usedOctets, null, 137, 5);
+            Add(checks, "hotspot_rank_top5_exact",
+                top5.Count == 5 && top5[0].ThirdOctet == 227 && top5[1].ThirdOctet == 75
+                    && top5[2].ThirdOctet == 226 && top5[3].ThirdOctet == 228 && top5[4].ThirdOctet == 74
+                    && top5[0].Distance == 26 && top5[0].Gateway == "192.168.227.1",
+                "got=" + top5[0].ThirdOctet + "(" + top5[0].Distance + ")," + top5[1].ThirdOctet + ","
+                    + top5[2].ThirdOctet + "," + top5[3].ThirdOctet + "," + top5[4].ThirdOctet);
+
+            var responded = new List<int>();
+            responded.Add(227);
+            List<HotspotCandidate> afterResponse = HotspotAdvisor.Rank(usedOctets, responded, 137, 5);
+            Add(checks, "hotspot_rank_drops_octets_with_live_gateway",
+                afterResponse.Count > 0 && afterResponse[0].ThirdOctet == 75,
+                "first=" + (afterResponse.Count > 0 ? afterResponse[0].ThirdOctet.ToString() : "-"));
+
+            bool allFarFromDefaults = true;
+            bool sorted = true;
+            foreach (HotspotCandidate candidate in top5)
+            {
+                foreach (int common in HotspotAdvisor.CommonDefaults)
+                {
+                    if (candidate.ThirdOctet == common)
+                    {
+                        allFarFromDefaults = false;
+                    }
+                }
+            }
+            for (int i = 1; i < top5.Count; i++)
+            {
+                if (top5[i].Distance > top5[i - 1].Distance)
+                {
+                    sorted = false;
+                }
+            }
+            Add(checks, "hotspot_rank_avoids_common_default_segments", allFarFromDefaults,
+                "no suggestion may land on a router/AP/printer default");
+            Add(checks, "hotspot_rank_sorted_by_distance", sorted, "distance must be non-increasing");
+            Add(checks, "hotspot_common_defaults_cover_the_usual_ones",
+                Array.IndexOf(HotspotAdvisor.CommonDefaults, 0) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 1) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 100) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 168) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 192) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 253) >= 0
+                    && Array.IndexOf(HotspotAdvisor.CommonDefaults, 227) < 0,
+                "227 must not be treated as a common default");
+            Add(checks, "hotspot_default_gateway_is_the_ics_one",
+                HotspotSettings.DefaultGateway == "192.168.137.1"
+                    && HotspotSettings.KeyPath == @"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters",
+                "key=" + HotspotSettings.KeyPath);
+
+            HotspotWriteResult badHost = HotspotSettings.Write("192.168.5.5");
+            HotspotWriteResult badText = HotspotSettings.Write("垃圾地址");
+            Add(checks, "hotspot_write_refuses_non_gateway_before_touching_registry",
+                !badHost.Ok && !badText.Ok && badHost.Error.Contains(".1") && badText.Error.Length > 0,
+                "host=" + badHost.Error + " text=" + badText.Error);
+            string rebind = HotspotSettings.BuildRebindCommand("{BFF609CA-2541-475D-884B-BA1DFC857680}");
+            Add(checks, "hotspot_rebind_filters_by_guid_property_not_parameter",
+                rebind.Contains("$_.InterfaceGuid -ieq 'bff609ca-2541-475d-884b-ba1dfc857680'")
+                    && rebind.Contains("Get-NetAdapter | Where-Object")
+                    && rebind.Contains("| Disable-NetAdapter -Confirm:$false")
+                    && rebind.Contains("| Enable-NetAdapter -Confirm:$false")
+                    && !rebind.Contains("-InterfaceGuid '")
+                    && !rebind.Contains("-Name"),
+                "got=" + rebind);
+            Add(checks, "hotspot_guid_normalization_strips_braces_and_case",
+                HotspotSettings.NormalizeGuid("{BFF609CA-2541-475D-884B-BA1DFC857680}")
+                    == "bff609ca-2541-475d-884b-ba1dfc857680"
+                    && HotspotSettings.NormalizeGuid(null).Length == 0,
+                "got=" + HotspotSettings.NormalizeGuid("{BFF609CA-2541-475D-884B-BA1DFC857680}"));
+            string rebindDetail;
+            string rebindEmpty = HotspotSettings.RebindAdapter(string.Empty, out rebindDetail);
+            Add(checks, "hotspot_rebind_without_guid_is_reported_not_guessed",
+                rebindEmpty.Contains("GUID") && rebindDetail.Length == 0,
+                "error=" + rebindEmpty);
+            AdapterInfo wifiDirect = new AdapterInfo();
+            wifiDirect.Name = "本地连接* 9";
+            wifiDirect.Description = "Microsoft Wi-Fi Direct Virtual Adapter #2";
+            AdapterInfo wired = new AdapterInfo();
+            wired.Name = "以太网";
+            wired.Description = "Realtek PCIe GbE Family Controller";
+            Add(checks, "hotspot_adapter_recognised_by_description",
+                HotspotSettings.IsHotspotAdapter(wifiDirect) && !HotspotSettings.IsHotspotAdapter(wired)
+                    && !HotspotSettings.IsHotspotAdapter(new AdapterInfo()),
+                "wifiDirect=" + HotspotSettings.IsHotspotAdapter(wifiDirect)
+                    + " wired=" + HotspotSettings.IsHotspotAdapter(wired));
             return checks;
         }
 

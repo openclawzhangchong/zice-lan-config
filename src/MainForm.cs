@@ -28,6 +28,15 @@ namespace ZiceLan
         private Button btnWallBlack;
         private ComboBox cmbWallBackground;
         private ComboBox cmbWallText;
+        private Label lblHotspotState;
+        private Label lblHotspotPick;
+        private ListBox lstHotspot;
+        private Button btnHotspotAdvice;
+        private Button btnHotspotApply;
+        private Button btnHotspotRevert;
+        private List<HotspotCandidate> _hotspotCandidates = new List<HotspotCandidate>();
+        private int _selectedHotspot = -1;
+        private string _hotspotPrevious = string.Empty;
         private ProgressBar bar;
         private Label lblPhase;
         private Label lblStats;
@@ -53,7 +62,7 @@ namespace ZiceLan
         {
             Text = Product.Title + " " + Product.VersionText;
             Font = new Font("Microsoft YaHei", 9F);
-            ClientSize = new Size(1014, 666);
+            ClientSize = new Size(1014, 800);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -68,6 +77,7 @@ namespace ZiceLan
             Load += delegate
             {
                 LoadAdapters(true);
+                RefreshHotspotState();
                 _ipTimer = new System.Windows.Forms.Timer();
                 _ipTimer.Interval = 15000;
                 _ipTimer.Tick += delegate { if (!_busy) { RefreshIpLineFromNetwork(); } };
@@ -250,28 +260,58 @@ namespace ZiceLan
             txtLog.BackColor = Color.White;
             logBox.Controls.Add(txtLog);
 
+            var hotspotBox = new GroupBox();
+            hotspotBox.Text = "本机 WiFi 热点网段（改这个会瞬断热点下挂的设备，不影响有线网）";
+            hotspotBox.SetBounds(12, 474, 990, 176);
+            Controls.Add(hotspotBox);
+
+            lblHotspotState = new Label();
+            lblHotspotState.SetBounds(16, 24, 958, 20);
+            lblHotspotState.Text = "热点状态：读取中…";
+            hotspotBox.Controls.Add(lblHotspotState);
+
+            btnHotspotAdvice = MakeButton("算建议段（探测）", 16, 50, 160, 26, delegate { StartHotspotAdvice(); });
+            hotspotBox.Controls.Add(btnHotspotAdvice);
+            btnHotspotApply = MakeButton("写入选中段并重启 ICS", 184, 50, 220, 26, delegate { ApplyHotspot(false); });
+            btnHotspotApply.Enabled = false;
+            hotspotBox.Controls.Add(btnHotspotApply);
+            btnHotspotRevert = MakeButton("改回原值 / 137.1", 412, 50, 170, 26, delegate { ApplyHotspot(true); });
+            hotspotBox.Controls.Add(btnHotspotRevert);
+
+            lblHotspotPick = new Label();
+            lblHotspotPick.SetBounds(592, 54, 382, 20);
+            lblHotspotPick.Text = "选中：—";
+            hotspotBox.Controls.Add(lblHotspotPick);
+
+            lstHotspot = new ListBox();
+            lstHotspot.SetBounds(16, 82, 958, 84);
+            lstHotspot.IntegralHeight = false;
+            lstHotspot.HorizontalScrollbar = true;
+            lstHotspot.SelectedIndexChanged += OnHotspotSelectionChanged;
+            hotspotBox.Controls.Add(lstHotspot);
+
             lblSelected = new Label();
-            lblSelected.SetBounds(12, 478, 990, 22);
+            lblSelected.SetBounds(12, 660, 990, 22);
             lblSelected.Font = new Font("Microsoft YaHei", 11F, FontStyle.Bold);
             lblSelected.Text = "还没选中地址";
             Controls.Add(lblSelected);
 
-            btnApply = MakeButton("3 写入静态 IP 并应用", 12, 504, 232, 40, delegate { StartApply(); });
+            btnApply = MakeButton("3 写入静态 IP 并应用", 12, 686, 232, 40, delegate { StartApply(); });
             btnApply.Enabled = false;
             Controls.Add(btnApply);
 
-            btnDhcp = MakeButton("恢复自动获取 IP（回退）", 254, 504, 212, 40, delegate { StartDhcpRestore(); });
+            btnDhcp = MakeButton("恢复自动获取 IP（回退）", 254, 686, 212, 40, delegate { StartDhcpRestore(); });
             Controls.Add(btnDhcp);
 
             var lblVersion = new Label();
-            lblVersion.SetBounds(700, 514, 302, 20);
+            lblVersion.SetBounds(700, 696, 302, 20);
             lblVersion.Text = Product.Title + " " + Product.VersionText;
             lblVersion.TextAlign = ContentAlignment.MiddleRight;
             lblVersion.ForeColor = Color.DimGray;
             Controls.Add(lblVersion);
 
             var lblWarn = new Label();
-            lblWarn.SetBounds(12, 552, 990, 54);
+            lblWarn.SetBounds(12, 734, 990, 54);
             lblWarn.ForeColor = Color.Firebrick;
             lblWarn.Text = "注意：改 IP 会让网络瞬断几秒，远程桌面 / 向日葵会掉线，需要用新地址重连。" + Environment.NewLine
                 + "写入前会对目标地址再做一次 ARP 双采样复核；万一改完连不上，用另一台机器或本地登录点「恢复自动获取 IP」即可回退。" + Environment.NewLine
@@ -338,6 +378,10 @@ namespace ZiceLan
             btnDhcp.Enabled = !busy;
             btnWallpaper.Enabled = !busy;
             btnWallBlack.Enabled = !busy;
+            btnHotspotAdvice.Enabled = !busy;
+            btnHotspotApply.Enabled = !busy && _selectedHotspot >= 0;
+            btnHotspotRevert.Enabled = !busy;
+            lstHotspot.Enabled = !busy;
             cmbWallBackground.Enabled = !busy;
             cmbWallText.Enabled = !busy;
             cmbAdapter.Enabled = !busy;
@@ -878,6 +922,155 @@ namespace ZiceLan
             ThreadPool.QueueUserWorkItem(delegate
             {
                 WallpaperService.Apply(ip, background, textColor, width, height, true, Log);
+            });
+        }
+
+        private void RefreshHotspotState()
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                HotspotState state = HotspotSettings.Read();
+                Ui(delegate
+                {
+                    lblHotspotState.Text = "热点状态：" + state.Describe();
+                    lblHotspotState.ForeColor = state.Error.Length > 0 ? Color.Firebrick : Color.Black;
+                });
+            });
+        }
+
+        private static string JoinGateways(List<HotspotCandidate> candidates)
+        {
+            var parts = new List<string>();
+            foreach (HotspotCandidate candidate in candidates)
+            {
+                parts.Add(candidate.Gateway + "(" + candidate.Distance + "跳)");
+            }
+            return string.Join("  ", parts.ToArray());
+        }
+
+        private static string JoinOctets(List<int> octets)
+        {
+            var parts = new List<string>();
+            foreach (int octet in octets)
+            {
+                parts.Add(octet.ToString(CultureInfo.InvariantCulture));
+            }
+            return string.Join(",", parts.ToArray());
+        }
+
+        private void StartHotspotAdvice()
+        {
+            if (_busy)
+            {
+                return;
+            }
+            lstHotspot.Items.Clear();
+            _hotspotCandidates = new List<HotspotCandidate>();
+            _selectedHotspot = -1;
+            lblHotspotPick.Text = "选中：—";
+            btnHotspotApply.Enabled = false;
+            SetBusy(true, "算建议段");
+            Log("算热点建议段：先排除本机已占用段和常见默认段，再对全部候选段的网关位发 ping（约 5-10 秒）");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string error;
+                List<AdapterInfo> adapters = Adapters.Read(out error);
+                HotspotState state = HotspotSettings.Read();
+                HotspotAdvice advice = HotspotSettings.Advise(adapters, state.ScopeAddress);
+                Ui(delegate
+                {
+                    foreach (HotspotCandidate candidate in advice.Picked)
+                    {
+                        lstHotspot.Items.Add(candidate.Gateway + "　" + candidate.Reason);
+                    }
+                    _hotspotCandidates = advice.Picked;
+                    Log("本机已占用段：" + JoinOctets(advice.Used) + "；当前热点段："
+                        + (state.ScopeAddress.Length > 0 ? state.ScopeAddress : "读不到"));
+                    if (advice.Responded.Count > 0)
+                    {
+                        Log("网关位有人应答、已剔除的段：" + JoinOctets(advice.Responded));
+                    }
+                    Log("建议段：" + JoinGateways(advice.Picked));
+                    lblPhase.Text = "热点建议：" + advice.Note;
+                    SetBusy(false, string.Empty);
+                });
+            });
+        }
+
+        private void OnHotspotSelectionChanged(object sender, EventArgs e)
+        {
+            int index = lstHotspot.SelectedIndex;
+            if (index < 0 || index >= _hotspotCandidates.Count)
+            {
+                _selectedHotspot = -1;
+                btnHotspotApply.Enabled = false;
+                return;
+            }
+            _selectedHotspot = index;
+            lblHotspotPick.Text = "选中：" + _hotspotCandidates[index].Gateway;
+            btnHotspotApply.Enabled = !_busy;
+        }
+
+        private void ApplyHotspot(bool revert)
+        {
+            if (_busy)
+            {
+                return;
+            }
+            string target;
+            if (revert)
+            {
+                target = _hotspotPrevious.Length > 0 ? _hotspotPrevious : HotspotSettings.DefaultGateway;
+            }
+            else
+            {
+                if (_selectedHotspot < 0 || _selectedHotspot >= _hotspotCandidates.Count)
+                {
+                    Log("先从下面的建议列表里选一个段。");
+                    return;
+                }
+                target = _hotspotCandidates[_selectedHotspot].Gateway;
+            }
+
+            HotspotState before = HotspotSettings.Read();
+            if (string.Equals(before.ScopeAddress, target, StringComparison.OrdinalIgnoreCase))
+            {
+                Log("热点段已经是 " + target + "，不用改。");
+                return;
+            }
+            string current = before.ScopeAddress.Length > 0 ? before.ScopeAddress : "读不到";
+            string detail = "本机 WiFi 热点网段：" + current + "  →  " + target + Environment.NewLine + Environment.NewLine
+                + "步骤：写注册表 ScopeAddress / ScopeAddressBackup → 重启 ICS 服务（SharedAccess）"
+                + "→ 禁用再启用热点虚拟网卡试着重建承载网络。" + Environment.NewLine
+                + "注意：承载网络是在移动热点被打开那一刻按注册表建的，所以新段通常要你在"
+                + "「设置 → 移动热点」关掉再打开一次才落到网卡上；有线网不受影响。" + Environment.NewLine
+                + "热点下挂的设备会掉线重连。原值 " + current + " 会记进日志，界面也有「改回原值」按钮。";
+            string title = revert ? "确认改回热点原段" : "确认修改热点网段";
+            if (MessageBox.Show(this, detail, title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            {
+                Log("已取消修改热点网段，注册表未改动。");
+                return;
+            }
+
+            SetBusy(true, "改热点段");
+            Log((revert ? "改回热点段 " : "写入热点段 ") + target);
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                ChangeResult change = HotspotSettings.Change(target, Log);
+                if (change.Previous.Length > 0)
+                {
+                    _hotspotPrevious = change.Previous;
+                }
+                Ui(delegate
+                {
+                    string message = (change.Written ? "" : "没写成。") + change.Detail;
+                    lblHotspotState.Text = "热点状态：" + (change.After != null ? change.After.Describe() : "读不到");
+                    SetBusy(false, string.Empty);
+                    MessageBox.Show(this, message, change.Verified ? "已生效（热点设备会重连）" : "请核对",
+                        MessageBoxButtons.OK, change.Verified ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                    RefreshIpLine();
+                });
             });
         }
 

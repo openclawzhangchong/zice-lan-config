@@ -28,6 +28,10 @@ namespace ZiceLan
             {
                 return WallpaperCli.Run(Cli.OutPath(args, "wallpaper.txt"), args);
             }
+            if (mode == "--hotspot")
+            {
+                return HotspotCli.Run(Cli.OutPath(args, "hotspot.txt"), args);
+            }
             if (mode == "--version")
             {
                 Console.WriteLine(Product.Title + " " + Product.VersionText);
@@ -40,6 +44,18 @@ namespace ZiceLan
 
     public static class Cli
     {
+        public static bool HasFlag(string[] args, string flag)
+        {
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, flag, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         public static string Value(string[] args, string flag, string fallback)
         {
             string inline = flag + "=";
@@ -270,15 +286,78 @@ namespace ZiceLan
         private static string FirstAdapterIp()
         {
             string error;
-            List<AdapterInfo> list = Adapters.Read(out error);
-            foreach (AdapterInfo info in list)
+            return Adapters.FirstValidIp(Adapters.Read(out error));
+        }
+    }
+
+    public static class HotspotCli
+    {
+        public static int Run(string outFile, string[] args)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("MODE=hotspot");
+            sb.AppendLine("PRODUCT=" + Product.Title + " " + Product.VersionText);
+
+            string readError;
+            List<AdapterInfo> adapters = Adapters.Read(out readError);
+            foreach (AdapterInfo info in adapters)
             {
-                if (IpCore.IsValidIpv4(info.Ip))
-                {
-                    return info.Ip;
-                }
+                sb.AppendLine("ADAPTER name=" + info.Name + " ifIndex=" + info.InterfaceIndex
+                    + " ip=" + info.Ip + " mask=" + info.Mask + " gw=" + info.Gateway);
             }
-            return string.Empty;
+
+            HotspotState state = HotspotSettings.Read();
+            sb.AppendLine("BEFORE " + state.Describe());
+            sb.AppendLine("KEY=HKLM\\" + HotspotSettings.KeyPath);
+
+            if (Cli.HasFlag(args, "--rebind"))
+            {
+                string rebindDetail;
+                string rebindError = HotspotSettings.RebindAdapter(state.AdapterGuid, out rebindDetail);
+                sb.AppendLine("REBIND guid=" + state.AdapterGuid + " " + rebindDetail
+                    + (rebindError.Length > 0 ? " error=" + rebindError : ""));
+                System.Threading.Thread.Sleep(3000);
+                HotspotState rebound = HotspotSettings.Read();
+                sb.AppendLine("AFTER " + rebound.Describe());
+                File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(true));
+                return rebindError.Length == 0 && rebound.AdapterIp.Length > 0 ? 0 : 3;
+            }
+
+            string apply = Cli.Value(args, "--apply", string.Empty);
+            if (apply.Length > 0)
+            {
+                ChangeResult change = HotspotSettings.Change(apply, delegate(string line) { sb.AppendLine("LOG " + line); });
+                sb.AppendLine("CHANGE target=" + apply + " written=" + change.Written
+                    + " verified=" + change.Verified + " previous=" + change.Previous);
+                sb.AppendLine("AFTER " + change.Detail);
+                File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(true));
+                return change.Verified ? 0 : 3;
+            }
+
+            HotspotAdvice advice = HotspotSettings.Advise(adapters, state.ScopeAddress);
+            sb.AppendLine("USED_OCTETS=" + Join(advice.Used));
+            sb.AppendLine("CURRENT_OCTET=" + advice.CurrentOctet);
+            sb.AppendLine("PROBED_COUNT=" + advice.ProbedCount);
+            sb.AppendLine("RESPONDED_COUNT=" + advice.Responded.Count);
+            sb.AppendLine("RESPONDED_OCTETS=" + Join(advice.Responded));
+            foreach (HotspotCandidate candidate in advice.Picked)
+            {
+                sb.AppendLine("SUGGEST " + candidate.Gateway + " distance=" + candidate.Distance
+                    + " :: " + candidate.Reason);
+            }
+            sb.AppendLine("NOTE=" + advice.Note);
+            File.WriteAllText(outFile, sb.ToString(), new UTF8Encoding(true));
+            return advice.Picked.Count > 0 ? 0 : 4;
+        }
+
+        private static string Join(List<int> values)
+        {
+            var parts = new List<string>();
+            foreach (int value in values)
+            {
+                parts.Add(value.ToString(CultureInfo.InvariantCulture));
+            }
+            return string.Join(",", parts.ToArray());
         }
     }
 }
