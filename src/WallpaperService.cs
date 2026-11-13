@@ -84,7 +84,7 @@ namespace ZiceLan
             ColorPreset foreground = WallpaperLayout.TextOrDefault(textName);
 
             string pathError;
-            string directory = AppPaths.EnsureDir("wallpapers", out pathError);
+            string directory = AppPaths.EnsureWallpaperDir(out pathError);
             RenderResult render = WallpaperRenderer.RenderToFile(ip, background, foreground, width, height, directory);
             if (!render.Ok)
             {

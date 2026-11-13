@@ -2,6 +2,20 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.7.1] - 2026-11-13
+
+<!-- V1.7.1-WALLPAPER-TO-D-DRIVE -->
+
+### 变更
+
+- **壁纸文件改存 `D:\智策壁纸\`**：此前壁纸跟 exe 走（`exe目录\wallpapers\`），而 exe 常被直接放在桌面上，生成的图就落了桌面。现在统一优先存 `D:\智策壁纸\`；机器没有 D 盘或写不进时，仍按老链路退回 `exe目录\wallpapers\`，再退 `%LOCALAPPDATA%\智策学校局域网配置软件\wallpapers\`。生成日志照旧写明实际路径，落到哪一眼能看见。
+- **不动的东西**：日志目录（`exe目录\logs\`）不在本次范围，维持原位；旧机器上已经生成的壁纸文件不搬，各归各处。
+
+### 变更（闸门）
+
+- 出厂闸门 84 → **86 条**：`WallpaperDirCandidates` 的链路形状被逐条钉住——首选必须是 `D:\智策壁纸`，兜底链必须是 exe 旁 `wallpapers` 与 `%LOCALAPPDATA%\智策学校局域网配置软件\wallpapers` 两级不缺。
+- 版本号 1.7.0.0 → 1.7.1.0。
+
 ## [1.7.0] - 2026-11-13
 
 <!-- V1.7-AUTO-LAN-DETECT -->

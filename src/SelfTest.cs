@@ -183,7 +183,7 @@ namespace ZiceLan
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(exePath);
             Add(checks, "file_version_stamped", version.FileVersion == Product.FileVersion,
                 "expected=" + Product.FileVersion + " got=" + version.FileVersion + " exe=" + Path.GetFileName(exePath));
-            Add(checks, "version_text_is_v1_7", Product.VersionText == "v1.7", "got=" + Product.VersionText);
+            Add(checks, "version_text_is_v1_7_1", Product.VersionText == "v1.7.1", "got=" + Product.VersionText);
             Add(checks, "title_is_zice", Product.Title == "智策学校局域网配置软件", "got=" + Product.Title);
 
             List<SubnetPreset> subnets = SubnetPresets.All();
@@ -236,6 +236,18 @@ namespace ZiceLan
                 WallpaperLayout.FileNameFor("192.168.168.201") == "ip-192.168.168.201.png"
                     && WallpaperLayout.FileNameFor("") == "ip-unknown.png",
                 "got=" + WallpaperLayout.FileNameFor("192.168.168.201"));
+
+            // —— v1.7.1：壁纸文件改存 D 盘，链路形状必须钉住 ——
+            string[] wallRoots = AppPaths.WallpaperDirCandidates();
+            Add(checks, "wallpaper_dir_first_choice_is_d_drive",
+                wallRoots.Length == 3 && wallRoots[0] == "D:\\" + AppPaths.WallpaperFolderName,
+                "first=" + (wallRoots.Length > 0 ? wallRoots[0] : "-"));
+            Add(checks, "wallpaper_dir_fallback_chain_intact",
+                wallRoots.Length == 3
+                    && wallRoots[1].EndsWith("\\wallpapers", StringComparison.Ordinal)
+                    && wallRoots[2].EndsWith("\\wallpapers", StringComparison.Ordinal)
+                    && wallRoots[2].Contains(Product.Title),
+                "exe旁=" + wallRoots[1] + " localdata=" + wallRoots[2]);
 
             List<ColorPreset> colors = WallpaperLayout.Colors();
             Add(checks, "wallpaper_color_presets", colors.Count == 8
