@@ -29,6 +29,16 @@ namespace ZiceLan
             return IpCore.IsValidIpv4(Ip) && IpCore.InPrefix(basePrefix, Ip);
         }
 
+        // 有格式合法且不是 169.254 APIPA 的 IPv4。APIPA 说明 DHCP 没拿到地址，
+        // 拿它当「所在局域网」只会扫出一个不存在的段，所以自动填充一律排除。
+        public bool HasRoutableIp
+        {
+            get
+            {
+                return IpCore.IsValidIpv4(Ip) && !Ip.StartsWith("169.254.", StringComparison.Ordinal);
+            }
+        }
+
         public string Label
         {
             get
@@ -145,6 +155,52 @@ namespace ZiceLan
                 }
             }
             return null;
+        }
+
+        // 「最能代表本机所在局域网」的网卡排名，越小越优先：
+        // 0 = 真实 IPv4 且读到了网关；1 = 真实 IPv4 没网关；2 = 只有 169.254 APIPA；
+        // 3 = 已连接但没地址的物理网卡；4 = 其余。同级保持原列表顺序（稳定）。
+        public static int PrimaryRank(AdapterInfo info)
+        {
+            if (info == null)
+            {
+                return int.MaxValue;
+            }
+            if (info.HasRoutableIp)
+            {
+                return info.Gateway.Length > 0 ? 0 : 1;
+            }
+            if (IpCore.IsValidIpv4(info.Ip))
+            {
+                return 2;
+            }
+            if (info.NetEnabled && info.PhysicalAdapter && info.Name.Length > 0)
+            {
+                return 3;
+            }
+            return 4;
+        }
+
+        // 自动检测所在局域网用：从网卡清单里挑出代表网卡。调用方在拿到 null
+        // （清单为空）或 HasRoutableIp == false（只有 APIPA / 没地址）时如实报错。
+        public static AdapterInfo PickPrimary(List<AdapterInfo> adapters)
+        {
+            if (adapters == null || adapters.Count == 0)
+            {
+                return null;
+            }
+            AdapterInfo best = adapters[0];
+            int bestRank = PrimaryRank(best);
+            for (int i = 1; i < adapters.Count; i++)
+            {
+                int rank = PrimaryRank(adapters[i]);
+                if (rank < bestRank)
+                {
+                    best = adapters[i];
+                    bestRank = rank;
+                }
+            }
+            return best;
         }
 
         public static string ReadArpTableText()

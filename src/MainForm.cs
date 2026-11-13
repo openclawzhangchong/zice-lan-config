@@ -19,6 +19,7 @@ namespace ZiceLan
         private NumericUpDown numReserve;
         private LinkLabel lblRouter;
         private Button btnRefresh;
+        private Button btnDetect;
         private Button btnScan;
         private Button btnRandom;
         private Button btnStop;
@@ -206,7 +207,7 @@ namespace ZiceLan
             var note = new Label();
             note.SetBounds(16, 116, 960, 20);
             note.ForeColor = Color.DimGray;
-            note.Text = "掩码 / 网关 / DNS 默认沿用本机当前值，只有末段会被换掉；保留末段填 0 = 连路由器一起扫；网段框也可以自己填别的段。";
+            note.Text = "掩码 / 网关 / DNS 默认沿用本机当前值，只有末段会被换掉；保留末段填 0 = 连路由器一起扫；网段框也可以自己填别的段；「自动检测网段」按本机所在局域网一键填充。";
             cfg.Controls.Add(note);
 
             var scanBox = new GroupBox();
@@ -222,6 +223,8 @@ namespace ZiceLan
             btnStop = MakeButton("停止", 256, 24, 68, 30, delegate { StopScan(); });
             btnStop.Enabled = false;
             scanBox.Controls.Add(btnStop);
+            btnDetect = MakeButton("自动检测网段", 332, 24, 152, 30, delegate { StartLanDetect(); });
+            scanBox.Controls.Add(btnDetect);
 
             bar = new ProgressBar();
             bar.SetBounds(16, 62, 468, 14);
@@ -372,6 +375,7 @@ namespace ZiceLan
             _busy = busy;
             btnScan.Enabled = !busy;
             btnRefresh.Enabled = !busy;
+            btnDetect.Enabled = !busy;
             btnStop.Enabled = busy;
             btnRandom.Enabled = !busy && _scan != null && _scan.Free.Count > 0;
             btnApply.Enabled = !busy && _selectedOctet > 0;
@@ -425,12 +429,25 @@ namespace ZiceLan
                 return;
             }
             int chosen = 0;
+            bool matchedPrefix = false;
+            string wantedPrefix = PrefixText;
             for (int i = 0; i < _adapters.Count; i++)
             {
-                if (_adapters[i].InPrefix(PrefixText))
+                if (_adapters[i].InPrefix(wantedPrefix))
                 {
                     chosen = i;
+                    matchedPrefix = true;
                     break;
+                }
+            }
+            if (!matchedPrefix)
+            {
+                // 没有网卡落在当前网段框的段里：按「最能代表所在局域网」挑一块，
+                // 让网段自动跟随本机现状，而不是停在写死的默认段上。
+                AdapterInfo primary = Adapters.PickPrimary(_adapters);
+                if (primary != null)
+                {
+                    chosen = _adapters.IndexOf(primary);
                 }
             }
             _suppressAdapterEvent = true;
@@ -449,6 +466,19 @@ namespace ZiceLan
                 Log("网卡 " + _current.Name + "（ifIndex " + _current.InterfaceIndex + "）当前 " + _current.Ip + "/" + _current.Mask
                     + "，网关 " + _current.Gateway + "，DNS " + string.Join(",", _current.Dns.ToArray())
                     + (_current.DhcpEnabled ? "，自动获取已开启" : "，已是静态地址"));
+                if (!matchedPrefix)
+                {
+                    if (_current.HasRoutableIp)
+                    {
+                        Log("网卡里没有落在 " + wantedPrefix + " 段的：已自动检测所在局域网，"
+                            + "网段 / 掩码 / 网关按网卡「" + _current.Name + "」的现值填充。");
+                    }
+                    else
+                    {
+                        Log("网卡里没有落在 " + wantedPrefix + " 段的，本机也没有可用的 IPv4"
+                            + "（可能没插网线或没拿到地址），网段保持 " + wantedPrefix + "。");
+                    }
+                }
             }
             RefreshIpLine();
         }
@@ -467,7 +497,9 @@ namespace ZiceLan
 
         private void PrefillFromAdapter(AdapterInfo info)
         {
-            if (IpCore.IsValidIpv4(info.Ip))
+            // 只有真实 IPv4（非 APIPA）才跟着改网段；169.254 说明 DHCP 没拿到地址，
+            // 拿它当网段只会扫出一个不存在的段。
+            if (info.HasRoutableIp)
             {
                 string prefix = IpCore.BasePrefix(info.Ip);
                 if (!cmbPrefix.Items.Contains(prefix))
@@ -484,6 +516,83 @@ namespace ZiceLan
             cmbDnsPreset.Text = DnsPresets.NameForServers(txtDns.Text);
             _suppressDnsPresetEvent = false;
             ProbeGateway();
+        }
+
+        private void StartLanDetect()
+        {
+            if (_busy)
+            {
+                return;
+            }
+            SetBusy(true, "自动检测");
+            Log("自动检测所在局域网：读网卡现值（只读，不改配置）");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string error;
+                List<AdapterInfo> adapters = Adapters.Read(out error);
+                AdapterInfo picked = Adapters.PickPrimary(adapters);
+                Ui(delegate { FinishLanDetect(error, adapters, picked); });
+            });
+        }
+
+        private void FinishLanDetect(string error, List<AdapterInfo> adapters, AdapterInfo picked)
+        {
+            SetBusy(false, string.Empty);
+            if (error.Length > 0)
+            {
+                lblPhase.Text = "自动检测失败：" + error;
+                Log("自动检测：读取网卡信息失败：" + error);
+                return;
+            }
+            if (adapters == null || adapters.Count == 0)
+            {
+                lblPhase.Text = "自动检测：没有读到任何网卡，网段保持 " + PrefixText + "。";
+                Log("自动检测：没有读到任何网卡，网段保持 " + PrefixText + " 不变。");
+                return;
+            }
+            string beforePrefix = PrefixText;
+            _adapters = adapters;
+            _suppressAdapterEvent = true;
+            try
+            {
+                cmbAdapter.Items.Clear();
+                foreach (AdapterInfo info in _adapters)
+                {
+                    cmbAdapter.Items.Add(info.Label);
+                }
+                cmbAdapter.SelectedIndex = _adapters.IndexOf(picked);
+            }
+            finally
+            {
+                _suppressAdapterEvent = false;
+            }
+            _current = picked;
+            if (picked == null || !picked.HasRoutableIp)
+            {
+                RefreshIpLine();
+                lblPhase.Text = "自动检测：本机没有可用的 IPv4，网段保持 " + beforePrefix + "。";
+                Log("自动检测：本机没有可用的 IPv4（可能没插网线或 DHCP 没拿到地址），网段保持 " + beforePrefix + " 不变。");
+                return;
+            }
+            PrefillFromAdapter(picked);
+            if (txtGateway.Text.Trim().Length == 0)
+            {
+                txtGateway.Text = SubnetPresets.FallbackGatewayFor(IpCore.BasePrefix(picked.Ip));
+                Log("自动检测：网卡没读到网关，按该段惯例填 " + txtGateway.Text.Trim());
+            }
+            bool changed = !string.Equals(beforePrefix, PrefixText, StringComparison.Ordinal);
+            Log("自动检测：网卡 " + picked.Name + " 当前 " + picked.Ip + "/" + picked.Mask
+                + "，所在网段 " + PrefixText + (changed ? "（已从 " + beforePrefix + " 自动切换，需重新扫描）" : "（与原网段一致）")
+                + "，网关 " + txtGateway.Text.Trim());
+            if (changed)
+            {
+                InvalidateScan("网段自动检测为 " + PrefixText + "，需要重新扫描。");
+            }
+            else
+            {
+                lblPhase.Text = "自动检测完成：网段没变，仍是 " + PrefixText + "。";
+            }
+            RefreshIpLine();
         }
 
         private void OnPrefixEdited()

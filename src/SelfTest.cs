@@ -183,7 +183,7 @@ namespace ZiceLan
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(exePath);
             Add(checks, "file_version_stamped", version.FileVersion == Product.FileVersion,
                 "expected=" + Product.FileVersion + " got=" + version.FileVersion + " exe=" + Path.GetFileName(exePath));
-            Add(checks, "version_text_is_v1_6", Product.VersionText == "v1.6", "got=" + Product.VersionText);
+            Add(checks, "version_text_is_v1_7", Product.VersionText == "v1.7", "got=" + Product.VersionText);
             Add(checks, "title_is_zice", Product.Title == "智策学校局域网配置软件", "got=" + Product.Title);
 
             List<SubnetPreset> subnets = SubnetPresets.All();
@@ -384,6 +384,38 @@ namespace ZiceLan
                 "netsh needs NetConnectionID; got=" + unnamed.UsableForNetsh);
             Add(checks, "adapter_label_shows_missing_address",
                 noAddress.Label == "以太网  [无 IPv4]", "got=" + noAddress.Label);
+
+            // —— 自动检测所在局域网（v1.7）：网卡甄选是纯逻辑，必须先过闸再上界面 ——
+            AdapterInfo apipaOnly = MakeAdapter("以太网", "169.254.9.9", "", true, true);
+            Add(checks, "adapter_has_routable_ip_rejects_apipa",
+                withAddress.HasRoutableIp && !apipaOnly.HasRoutableIp && !noAddress.HasRoutableIp,
+                "real ip=" + withAddress.HasRoutableIp + " apipa=" + apipaOnly.HasRoutableIp
+                    + " empty=" + noAddress.HasRoutableIp);
+            Add(checks, "pick_primary_empty_list_is_null",
+                Adapters.PickPrimary(null) == null && Adapters.PickPrimary(new List<AdapterInfo>()) == null,
+                "empty input must not throw or fabricate an adapter");
+            AdapterInfo dhcpWithGw = MakeAdapter("以太网", "192.168.1.23", "192.168.1.1", true, true);
+            AdapterInfo dhcpNoGw = MakeAdapter("无线网络连接", "192.168.1.42", "", true, true);
+            Add(checks, "pick_primary_prefers_gateway_over_bare_ip",
+                Adapters.PickPrimary(MakeList(dhcpNoGw, dhcpWithGw)) == dhcpWithGw
+                    && Adapters.PickPrimary(MakeList(dhcpWithGw, dhcpNoGw)) == dhcpWithGw,
+                "same segment: the adapter that knows its gateway wins in either order");
+            Add(checks, "pick_primary_prefers_real_ip_over_apipa",
+                Adapters.PickPrimary(MakeList(apipaOnly, dhcpWithGw)) == dhcpWithGw
+                    && Adapters.PickPrimary(MakeList(dhcpWithGw, apipaOnly)) == dhcpWithGw,
+                "169.254 APIPA must never outrank a routable address");
+            AdapterInfo connectedBare = MakeAdapter("以太网", "", "", true, true);
+            AdapterInfo idleBare = MakeAdapter("以太网 2", "", "", false, true);
+            Add(checks, "pick_primary_prefers_apipa_over_connected_bare",
+                Adapters.PickPrimary(MakeList(connectedBare, apipaOnly)) == apipaOnly,
+                "an APIPA address at least names the failed DHCP attempt; a bare link names nothing");
+            Add(checks, "pick_primary_prefers_connected_bare_over_idle",
+                Adapters.PickPrimary(MakeList(idleBare, connectedBare)) == connectedBare,
+                "a connected adapter without address beats a disconnected one");
+            Add(checks, "pick_primary_ties_keep_first_order",
+                Adapters.PickPrimary(MakeList(dhcpWithGw, MakeAdapter("USB 网卡", "10.0.0.5", "10.0.0.1", true, true)))
+                    == dhcpWithGw,
+                "equal rank must keep the original order, not flip by pointer luck");
             Add(checks, "hotspot_gateway_and_octet_roundtrip",
                 HotspotAdvisor.GatewayFor(227) == "192.168.227.1"
                     && HotspotAdvisor.OctetFromGateway("192.168.227.1") == 227
@@ -534,6 +566,27 @@ namespace ZiceLan
         private static void Add(List<Check> checks, string key, bool ok, string detail)
         {
             checks.Add(new Check(key, ok, detail));
+        }
+
+        private static AdapterInfo MakeAdapter(string name, string ip, string gateway, bool enabled, bool physical)
+        {
+            var info = new AdapterInfo();
+            info.Name = name;
+            info.Ip = ip == null ? "" : ip;
+            info.Gateway = gateway == null ? "" : gateway;
+            info.NetEnabled = enabled;
+            info.PhysicalAdapter = physical;
+            return info;
+        }
+
+        private static List<AdapterInfo> MakeList(params AdapterInfo[] items)
+        {
+            var list = new List<AdapterInfo>();
+            foreach (AdapterInfo info in items)
+            {
+                list.Add(info);
+            }
+            return list;
         }
     }
 }
